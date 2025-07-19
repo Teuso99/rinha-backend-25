@@ -1,0 +1,110 @@
+﻿x-service-templates:
+  api: &api
+    image: rinha-api
+    build:
+      context: .
+      dockerfile: rinha-api/Dockerfile
+    networks:
+      - rinha
+      - rinha-db
+    depends_on:
+      - db    
+    environment:
+      - URL_DEFAULT=http://payment-processor-default:8080
+      - URL_FALLBACK=http://payment-processor-fallback:8080
+      - DB_CONNECTION_STRING=Host=db;Database=rinha;Username=usr_rinha;Password=123
+    deploy:
+      resources:
+        limits:
+          cpus: "0.55"
+          memory: "30MB"
+
+  queue: &queue
+    image: redis:8.0-alpine
+    networks:
+      - rinha
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: "15MB"
+
+services:
+
+#--- LOAD BALANCER ---
+  nginx:
+    image: nginx:1.29-alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api01
+      - api02
+    ports:
+      - "9999:9999"
+    networks:
+      - rinha
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: "15MB"
+
+#--- QUEUES ---
+  queue01:
+    <<: *queue
+    container_name: queue01
+    hostname: queue01
+    ports:
+      - "6379:6379"
+    
+  queue02:
+    <<: *queue
+    container_name: queue02
+    hostname: queue02
+    ports:
+      - "6380:6380"
+
+#--- APIs ---          
+  api01:
+    <<: *api
+    container_name: api01
+    hostname: api01
+    environment:
+      - URL_REDIS=queue01:6379
+    depends_on:
+      - queue01
+
+  api02:
+    <<: *api
+    container_name: api02
+    hostname: api02
+    environment:
+      - URL_REDIS=queue02:6380
+    depends_on:
+      - queue02
+
+#--- DB ---
+  db:
+    container_name: db
+    hostname: db
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_USER=usr_rinha
+      - POSTGRES_PASSWORD=123
+      - POSTGRES_DB=rinha
+    networks:
+      - rinha-db
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: "15MB"
+  
+networks:
+  rinha:
+    driver: bridge
+  rinha-db:
+    driver: bridge
+  payment-processor-net:
+    name: payment-processor
+    external: true
