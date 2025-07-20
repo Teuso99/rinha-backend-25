@@ -1,31 +1,75 @@
 using System.Text.Json;
+using rinha_api.Context;
+using rinha_api.Model;
 using StackExchange.Redis;
 
 namespace rinha_api;
 
-public class ProcessPaymentService(IConnectionMultiplexer redis) : BackgroundService
+public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext context) : BackgroundService
 {
     private readonly IDatabase _queue = redis.GetDatabase();
-    private readonly string _urlDefault = Environment.GetEnvironmentVariable("URL_DEFAULT") ?? string.Empty;
-    private readonly string _urlFallback = Environment.GetEnvironmentVariable("URL_FALLBACK") ?? string.Empty;
-
+    private readonly IRinhaContext _context = context;
+    
+    private static readonly string UrlDefault = Environment.GetEnvironmentVariable("URL_DEFAULT") ?? string.Empty;
+    private static readonly string UrlFallback = Environment.GetEnvironmentVariable("URL_FALLBACK") ?? string.Empty;
+    
+    private readonly HttpClient _httpClientDefault = new()
+    {
+        BaseAddress = new Uri(UrlDefault)
+    };
+    
+    private readonly HttpClient _httpClientFallback = new()
+    {
+        BaseAddress = new Uri(UrlFallback)
+    };
+    
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        //sleep for 5sec
-        await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+        Console.WriteLine("[-] Running...");
 
-        Console.WriteLine("é o mengudo pora");
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var paymentJson = await _queue.ListLeftPopAsync("payments");
+                
+            if (paymentJson.IsNullOrEmpty)
+            {
+                await Task.Delay(1000, stoppingToken);
+                continue;
+            }
 
-        //dequeue payment JSON into Payment object setting RequestedAt to DateTime.UtcNow
+            var payment = JsonSerializer.Deserialize<Payment>(paymentJson);
+            
+            try
+            {
+                var defaultResponse = await _httpClientDefault.PostAsJsonAsync("payments", payment, stoppingToken);
 
-        // try sending the payment to the default service
-
-        //if it fails, try sending it to the fallback service
-
-        // if both fail, try one more time with the default service
-
-        // if it fails again, queue the payment for later processing
-
-        //when the payment is successfully processed, save it to the database
+                if (defaultResponse.IsSuccessStatusCode)
+                {
+                    _context.PaymentsByDefault.Add(payment);
+                    
+                    await _context.SaveChangesAsync(stoppingToken);
+                    
+                    continue;
+                }
+                
+                var fallbackResponse = await _httpClientFallback.PostAsJsonAsync("payments", payment, stoppingToken);
+                
+                if (fallbackResponse.IsSuccessStatusCode)
+                {
+                    _context.PaymentsByFallback.Add(payment);
+                    
+                    await _context.SaveChangesAsync(stoppingToken);
+                    
+                    continue;
+                }
+                
+                // If both services failed, enqueue the payment for later processing
+                await _queue.ListRightPushAsync("payments", paymentJson, flags: CommandFlags.FireAndForget);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"[-] {e}");
+            }
+        }
     }
 }

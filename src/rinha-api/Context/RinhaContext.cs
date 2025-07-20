@@ -3,9 +3,10 @@ using rinha_api.Model;
 
 namespace rinha_api.Context;
 
-public class RinhaContext : DbContext
+public class RinhaContext(DbContextOptions<RinhaContext> options) : DbContext(options), IRinhaContext
 {
-    public DbSet<Payment> Payments { get; set; }
+    public DbSet<Payment> PaymentsByDefault { get; set; }
+    public DbSet<Payment> PaymentsByFallback { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -15,4 +16,12 @@ public class RinhaContext : DbContext
  
         base.OnConfiguring(optionsBuilder);
     }
+}
+
+public interface IRinhaContext
+{
+    DbSet<Payment> PaymentsByDefault { get; set; }
+    DbSet<Payment> PaymentsByFallback { get; set; }
+    
+    Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

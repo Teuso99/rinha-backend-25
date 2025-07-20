@@ -6,28 +6,20 @@
       dockerfile: rinha-api/Dockerfile
     networks:
       - rinha
-      - rinha-db
-    depends_on:
-      - db    
+      - payment-processor
     environment:
+      - URL_REDIS=queue:6379
       - URL_DEFAULT=http://payment-processor-default:8080
       - URL_FALLBACK=http://payment-processor-fallback:8080
-      - DB_CONNECTION_STRING=Host=db;Database=rinha;Username=usr_rinha;Password=123
+      - DB_CONNECTION_STRING=Host=db;Port=5432;Database=rinha;Username=usr_rinha;Password=123
+    depends_on:
+      - db
+      - queue
     deploy:
       resources:
         limits:
           cpus: "0.55"
           memory: "30MB"
-
-  queue: &queue
-    image: redis:8.0-alpine
-    networks:
-      - rinha
-    deploy:
-      resources:
-        limits:
-          cpus: "0.15"
-          memory: "15MB"
 
 services:
 
@@ -43,45 +35,41 @@ services:
       - "9999:9999"
     networks:
       - rinha
+      - payment-processor
     deploy:
       resources:
         limits:
           cpus: "0.15"
           memory: "15MB"
 
-#--- QUEUES ---
-  queue01:
-    <<: *queue
-    container_name: queue01
-    hostname: queue01
+  queue:
+    image: redis:8.0-alpine
+    container_name: queue
+    hostname: queue
+    networks:
+      - rinha
     ports:
       - "6379:6379"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: "15MB"
     
-  queue02:
-    <<: *queue
-    container_name: queue02
-    hostname: queue02
-    ports:
-      - "6380:6380"
-
 #--- APIs ---          
   api01:
     <<: *api
     container_name: api01
     hostname: api01
-    environment:
-      - URL_REDIS=queue01:6379
-    depends_on:
-      - queue01
+    # ports:
+    #   - "8180:8180"
 
   api02:
     <<: *api
     container_name: api02
     hostname: api02
-    environment:
-      - URL_REDIS=queue02:6380
-    depends_on:
-      - queue02
+    # ports:
+    #   - "3000:3000"
 
 #--- DB ---
   db:
@@ -92,8 +80,12 @@ services:
       - POSTGRES_USER=usr_rinha
       - POSTGRES_PASSWORD=123
       - POSTGRES_DB=rinha
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/sql/init.sql
     networks:
-      - rinha-db
+      - rinha
+    ports:
+      - "5432:5432"
     deploy:
       resources:
         limits:
@@ -103,8 +95,5 @@ services:
 networks:
   rinha:
     driver: bridge
-  rinha-db:
-    driver: bridge
-  payment-processor-net:
-    name: payment-processor
+  payment-processor:
     external: true
