@@ -48,11 +48,13 @@ app.UseHttpsRedirection();
 
 app.MapGet("/payments-summary", (DateTime? from, DateTime? to) =>
 {
-    var paymentsByDefault = app.Services.GetRequiredService<RinhaContext>().PaymentsByDefault.Where(p =>
+    var paymentsByDefault = app.Services.GetRequiredService<RinhaContext>().Payment.Where(p =>
+                                                p.ProcessorName == "default" &&
                                                 (from == null || p.RequestedAt >= from.Value) &&
                                                 (to == null || p.RequestedAt <= to.Value)).ToList();
     
-    var paymentsByFallback = app.Services.GetRequiredService<RinhaContext>().PaymentsByFallback.Where(p =>
+    var paymentsByFallback = app.Services.GetRequiredService<RinhaContext>().Payment.Where(p =>
+                                                p.ProcessorName == "fallback" &&
                                                 (from == null || p.RequestedAt >= from.Value) &&
                                                 (to == null || p.RequestedAt <= to.Value)).ToList();
     
@@ -63,7 +65,7 @@ app.MapPost("/payments", async (Guid correlationId, decimal amount, [FromService
 {
     var queue = redis.GetDatabase();
     
-    var payment = new Payment(correlationId, amount);
+    var payment = new PaymentRequestDTO(correlationId, amount, DateTime.UtcNow);
     
     var result = await queue.ListRightPushAsync("payments", JsonSerializer.Serialize(payment));
 
@@ -72,3 +74,4 @@ app.MapPost("/payments", async (Guid correlationId, decimal amount, [FromService
 
 app.Run();
 
+internal record PaymentRequestDTO(Guid CorrelationId, decimal Amount, DateTime RequestedAt);

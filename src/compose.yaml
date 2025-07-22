@@ -61,27 +61,23 @@ services:
     <<: *api
     container_name: api01
     hostname: api01
-    # ports:
-    #   - "8180:8180"
 
   api02:
     <<: *api
     container_name: api02
     hostname: api02
-    # ports:
-    #   - "3000:3000"
 
 #--- DB ---
   db:
     container_name: db
     hostname: db
-    image: postgres:17-alpine
+    image: postgres:16-alpine
     environment:
       - POSTGRES_USER=usr_rinha
       - POSTGRES_PASSWORD=123
       - POSTGRES_DB=rinha
     volumes:
-      - ./init.sql:/docker-entrypoint-initdb.d/sql/init.sql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - rinha
     ports:
@@ -89,9 +85,20 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: "15MB"
+          cpus: "0.35"
+          memory: "110MB"
   
+  # pgadmin:
+  #   image: dpage/pgadmin4:latest
+  #   container_name: pgadmin
+  #   depends_on:
+  #     - db
+  #   environment:
+  #     PGADMIN_DEFAULT_EMAIL: user@localhost.com
+  #     PGADMIN_DEFAULT_PASSWORD: password
+  #   ports:
+  #     - 9000:9000
+
 networks:
   rinha:
     driver: bridge

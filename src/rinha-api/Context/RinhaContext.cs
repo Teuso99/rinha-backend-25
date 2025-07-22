@@ -5,8 +5,7 @@ namespace rinha_api.Context;
 
 public class RinhaContext(DbContextOptions<RinhaContext> options) : DbContext(options), IRinhaContext
 {
-    public DbSet<Payment> PaymentsByDefault { get; set; }
-    public DbSet<Payment> PaymentsByFallback { get; set; }
+    public DbSet<Payment> Payment { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -16,12 +15,18 @@ public class RinhaContext(DbContextOptions<RinhaContext> options) : DbContext(op
  
         base.OnConfiguring(optionsBuilder);
     }
+    
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Payment>().ToTable("payment");
+        
+        base.OnModelCreating(modelBuilder);
+    }
 }
 
 public interface IRinhaContext
 {
-    DbSet<Payment> PaymentsByDefault { get; set; }
-    DbSet<Payment> PaymentsByFallback { get; set; }
+    DbSet<Payment> Payment { get; set; }
     
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

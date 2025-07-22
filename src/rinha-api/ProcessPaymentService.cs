@@ -8,8 +8,6 @@ namespace rinha_api;
 public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext context) : BackgroundService
 {
     private readonly IDatabase _queue = redis.GetDatabase();
-    private readonly IRinhaContext _context = context;
-    
     private static readonly string UrlDefault = Environment.GetEnvironmentVariable("URL_DEFAULT") ?? string.Empty;
     private static readonly string UrlFallback = Environment.GetEnvironmentVariable("URL_FALLBACK") ?? string.Empty;
     
@@ -45,9 +43,11 @@ public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext c
 
                 if (defaultResponse.IsSuccessStatusCode)
                 {
-                    _context.PaymentsByDefault.Add(payment);
+                    payment.ProcessorName = "default";
                     
-                    await _context.SaveChangesAsync(stoppingToken);
+                    context.Payment.Add(payment);
+                    
+                    await context.SaveChangesAsync(stoppingToken);
                     
                     continue;
                 }
@@ -56,9 +56,11 @@ public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext c
                 
                 if (fallbackResponse.IsSuccessStatusCode)
                 {
-                    _context.PaymentsByFallback.Add(payment);
+                    payment.ProcessorName = "fallback";
                     
-                    await _context.SaveChangesAsync(stoppingToken);
+                    context.Payment.Add(payment);
+                    
+                    await context.SaveChangesAsync(stoppingToken);
                     
                     continue;
                 }
