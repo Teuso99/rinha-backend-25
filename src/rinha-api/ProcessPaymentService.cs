@@ -32,15 +32,15 @@ public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext c
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var paymentJson = await _queue.ListLeftPopAsync("payments");
+            var paymentJson = await _queue.ListLeftPopAsync("payments", 100);
                 
-            if (paymentJson.IsNullOrEmpty)
+            if (paymentJson is null || paymentJson.Length <= 0)
             {
                 await Task.Delay(1000, stoppingToken);
                 continue;
             }
-            
-            var payment = JsonSerializer.Deserialize<Payment>(paymentJson);
+
+            List<Payment> payments = paymentJson.Select(p => JsonSerializer.Deserialize<Payment>(p)).ToList();
             
             try
             {
@@ -48,36 +48,16 @@ public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext c
 
                 if (_defaultHealthy)
                 {
-                    var defaultResponse = await _httpClientDefault.PostAsJsonAsync("payments", payment, stoppingToken);
-                    
-                    if (defaultResponse.IsSuccessStatusCode)
-                    {
-                        payment.ProcessorName = "default";
-                    
-                        context.Payment.Add(payment);
-                    
-                        await context.SaveChangesAsync(stoppingToken);
-                    
-                        continue;
-                    }
+                    await ProcessByDefault(payments, stoppingToken);
+                    continue;
                 }
-                
+
                 _fallbackHealthy = await IsProcessorHealthy(false);
 
                 if (_fallbackHealthy)
                 {
-                    var fallbackResponse = await _httpClientFallback.PostAsJsonAsync("payments", payment, stoppingToken);
-                    
-                    if (fallbackResponse.IsSuccessStatusCode)
-                    {
-                        payment.ProcessorName = "fallback";
-                    
-                        context.Payment.Add(payment);
-                    
-                        await context.SaveChangesAsync(stoppingToken);
-                    
-                        continue;
-                    }
+                    await ProcessByFallback(payments, stoppingToken);
+                    continue;
                 }
 
                 await _queue.ListRightPushAsync("payments", paymentJson, flags: CommandFlags.FireAndForget);
@@ -89,6 +69,45 @@ public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext c
         }
     }
 
+    private async Task ProcessByDefault(List<Payment> payments, CancellationToken stoppingToken)
+    {
+        foreach (var payment in payments)
+        {
+            var response = await _httpClientDefault.PostAsJsonAsync("payments", payment, stoppingToken);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                await _queue.ListRightPushAsync("payments", JsonSerializer.Serialize(payment), flags: CommandFlags.FireAndForget);
+                continue;
+            }
+            
+            payment.ProcessorName = "default";
+            context.Payment.Add(payment);
+        }
+  
+        await context.SaveChangesAsync(stoppingToken);
+    }
+    
+    private async Task ProcessByFallback(List<Payment> payments, CancellationToken stoppingToken)
+    {
+        foreach (var payment in payments)
+        {
+            var response = await _httpClientFallback.PostAsJsonAsync("payments", payment, stoppingToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                await _queue.ListRightPushAsync("payments", JsonSerializer.Serialize(payment), flags: CommandFlags.FireAndForget);
+                continue;
+            }
+                
+            
+            payment.ProcessorName = "fallback";
+            context.Payment.Add(payment);
+        }
+  
+        await context.SaveChangesAsync(stoppingToken);
+    }
+    
     private async Task<bool> IsProcessorHealthy(bool isDefault)
     {
         if (isDefault && (DateTime.UtcNow - _defaultHealthCheckLastCall).TotalSeconds < 5)
