@@ -18,8 +18,8 @@
     deploy:
       resources:
         limits:
-          cpus: "0.55"
-          memory: "30MB"
+          cpus: "0.45"
+          memory: "120MB"
 
 services:
 
@@ -39,8 +39,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: "15MB"
+          cpus: "0.20"
+          memory: "100MB"
 
   queue:
     image: redis:8.0-alpine
@@ -53,8 +53,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: "15MB"
+          cpus: "0.10"
+          memory: "20MB"
     
 #--- APIs ---          
   api01:
@@ -85,19 +85,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.35"
+          cpus: "0.30"
           memory: "110MB"
-  
-  # pgadmin:
-  #   image: dpage/pgadmin4:latest
-  #   container_name: pgadmin
-  #   depends_on:
-  #     - db
-  #   environment:
-  #     PGADMIN_DEFAULT_EMAIL: user@localhost.com
-  #     PGADMIN_DEFAULT_PASSWORD: password
-  #   ports:
-  #     - 9000:9000
 
 networks:
   rinha:

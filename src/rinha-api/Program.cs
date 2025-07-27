@@ -46,26 +46,26 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 
-app.MapGet("/payments-summary", (DateTime? from, DateTime? to) =>
+app.MapGet("/payments-summary", async (DateTime? from, DateTime? to) =>
 {
-    var paymentsByDefault = app.Services.GetRequiredService<RinhaContext>().Payment.Where(p =>
+    var paymentsByDefault = await app.Services.GetRequiredService<RinhaContext>().Payment.Where(p =>
                                                 p.ProcessorName == "default" &&
                                                 (from == null || p.RequestedAt >= from.Value) &&
-                                                (to == null || p.RequestedAt <= to.Value)).ToList();
+                                                (to == null || p.RequestedAt <= to.Value)).ToListAsync();
     
-    var paymentsByFallback = app.Services.GetRequiredService<RinhaContext>().Payment.Where(p =>
+    var paymentsByFallback = await app.Services.GetRequiredService<RinhaContext>().Payment.Where(p =>
                                                 p.ProcessorName == "fallback" &&
                                                 (from == null || p.RequestedAt >= from.Value) &&
-                                                (to == null || p.RequestedAt <= to.Value)).ToList();
+                                                (to == null || p.RequestedAt <= to.Value)).ToListAsync();
     
     return Results.Ok(new PaymentsDTO(paymentsByDefault, paymentsByFallback));
 });
 
-app.MapPost("/payments", async (Guid correlationId, decimal amount, [FromServices] IConnectionMultiplexer redis) =>
+app.MapPost("/payments", async (PaymentRequestDTO request, [FromServices] IConnectionMultiplexer redis) =>
 {
     var queue = redis.GetDatabase();
     
-    var payment = new PaymentRequestDTO(correlationId, amount, DateTime.UtcNow);
+    var payment = new Payment(request.CorrelationId, request.Amount, string.Empty);
     
     var result = await queue.ListRightPushAsync("payments", JsonSerializer.Serialize(payment));
 
@@ -74,4 +74,4 @@ app.MapPost("/payments", async (Guid correlationId, decimal amount, [FromService
 
 app.Run();
 
-internal record PaymentRequestDTO(Guid CorrelationId, decimal Amount, DateTime RequestedAt);
+record PaymentRequestDTO(Guid CorrelationId, decimal Amount);
