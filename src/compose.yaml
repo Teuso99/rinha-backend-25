@@ -19,7 +19,7 @@
       resources:
         limits:
           cpus: "0.45"
-          memory: "120MB"
+          memory: "90MB"
 
 services:
 
@@ -40,7 +40,7 @@ services:
       resources:
         limits:
           cpus: "0.20"
-          memory: "100MB"
+          memory: "20MB"
 
   queue:
     image: redis:8.0-alpine
@@ -54,7 +54,7 @@ services:
       resources:
         limits:
           cpus: "0.10"
-          memory: "20MB"
+          memory: "40MB"
     
 #--- APIs ---          
   api01:
