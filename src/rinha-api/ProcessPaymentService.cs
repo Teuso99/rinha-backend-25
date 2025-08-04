@@ -99,8 +99,7 @@ public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext c
                 await _queue.ListRightPushAsync("payments", JsonSerializer.Serialize(payment), flags: CommandFlags.FireAndForget);
                 continue;
             }
-                
-            
+
             payment.ProcessorName = "fallback";
             context.Payment.Add(payment);
         }
@@ -137,6 +136,6 @@ public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext c
         
         var response = JsonSerializer.Deserialize<HealthcheckDTO>(await healthcheck.Content.ReadAsStringAsync());
 
-        return response is not null && !response.Failing && response.MinResponseTime <= 500;
+        return response is not null && !response.Failing && response.MinResponseTime <= 100;
     }
 }

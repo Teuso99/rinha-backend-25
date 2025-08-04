@@ -1,22 +1,17 @@
+using System.Runtime;
 using System.Text.Json;
-using Microsoft.AspNetCore.Http.HttpResults;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Distributed;
 using rinha_api;
 using rinha_api.Context;
 using rinha_api.DTO;
 using rinha_api.Model;
 using StackExchange.Redis;
 
-var builder = WebApplication.CreateBuilder(args);
-
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+var builder = WebApplication.CreateSlimBuilder(args);
 
 var urlRedis = Environment.GetEnvironmentVariable("URL_REDIS") ?? "localhost";
-
 urlRedis += ",abortConnect=false";
 
 builder.Services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(urlRedis));
@@ -35,28 +30,36 @@ builder.Services.AddDbContext<IRinhaContext, RinhaContext>(options =>
 
 builder.Services.AddHostedService<ProcessPaymentService>();
 
+builder.Services.ConfigureHttpJsonOptions(options => {
+    options.SerializerOptions.TypeInfoResolver = RinhaSerializerContext.Default;
+    options.SerializerOptions.DefaultBufferSize = 256;
+});
+
+builder.Services.Configure<JsonSerializerOptions>(options => {
+    options.TypeInfoResolver = RinhaSerializerContext.Default;
+    options.DefaultBufferSize = 256;
+});
+
+builder.Logging.ClearProviders();
+GCSettings.LatencyMode = GCLatencyMode.LowLatency;
+
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-}
-
-app.UseHttpsRedirection();
-
+app.UseRouting();
 
 app.MapGet("/payments-summary", async (DateTime? from, DateTime? to) =>
 {
-    var paymentsByDefault = await app.Services.GetRequiredService<RinhaContext>().Payment.Where(p =>
-                                                p.ProcessorName == "default" &&
-                                                (from == null || p.RequestedAt >= from.Value) &&
-                                                (to == null || p.RequestedAt <= to.Value)).ToListAsync();
+    var paymentsByDefault = await app.Services.GetRequiredService<RinhaContext>().Payment
+                                                .AsNoTracking().Where(p =>
+                                                    p.ProcessorName == "default" &&
+                                                    (from == null || p.RequestedAt >= from.Value) &&
+                                                    (to == null || p.RequestedAt <= to.Value)).ToListAsync();
     
-    var paymentsByFallback = await app.Services.GetRequiredService<RinhaContext>().Payment.Where(p =>
-                                                p.ProcessorName == "fallback" &&
-                                                (from == null || p.RequestedAt >= from.Value) &&
-                                                (to == null || p.RequestedAt <= to.Value)).ToListAsync();
+    var paymentsByFallback = await app.Services.GetRequiredService<RinhaContext>().Payment
+                                                .AsNoTracking().Where(p =>
+                                                    p.ProcessorName == "fallback" &&
+                                                    (from == null || p.RequestedAt >= from.Value) &&
+                                                    (to == null || p.RequestedAt <= to.Value)).ToListAsync();
     
     return Results.Ok(new PaymentsDTO(paymentsByDefault, paymentsByFallback));
 });
@@ -75,3 +78,7 @@ app.MapPost("/payments", async (PaymentRequestDTO request, [FromServices] IConne
 app.Run();
 
 record PaymentRequestDTO(Guid CorrelationId, decimal Amount);
+
+[JsonSerializable(typeof(PaymentRequestDTO))]
+[JsonSerializable(typeof(PaymentsDTO))]
+internal partial class RinhaSerializerContext : JsonSerializerContext { }
