@@ -18,7 +18,7 @@
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.50"
           memory: "90MB"
 
 services:
@@ -40,7 +40,7 @@ services:
       resources:
         limits:
           cpus: "0.20"
-          memory: "20MB"
+          memory: "50MB"
 
   queue:
     image: redis:8.0-alpine
@@ -54,7 +54,7 @@ services:
       resources:
         limits:
           cpus: "0.10"
-          memory: "40MB"
+          memory: "10MB"
     
 #--- APIs ---          
   api01:
@@ -85,7 +85,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.30"
+          cpus: "0.20"
           memory: "110MB"
 
 networks:

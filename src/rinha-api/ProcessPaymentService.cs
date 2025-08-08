@@ -1,18 +1,17 @@
 using System.Text.Json;
-using rinha_api.Context;
 using rinha_api.DTO;
 using rinha_api.Model;
+using rinha_api.Repository;
 using StackExchange.Redis;
 
 namespace rinha_api;
 
-public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext context) : BackgroundService
+public class ProcessPaymentService(IConnectionMultiplexer redis, IPaymentRepository paymentRepository) : BackgroundService
 {
     private readonly IDatabase _queue = redis.GetDatabase();
     private static readonly string UrlDefault = Environment.GetEnvironmentVariable("URL_DEFAULT") ?? string.Empty;
     private static readonly string UrlFallback = Environment.GetEnvironmentVariable("URL_FALLBACK") ?? string.Empty;
-    private DateTime _defaultHealthCheckLastCall = DateTime.MinValue;
-    private DateTime _fallbackHealthCheckLastCall = DateTime.MinValue;
+    private DateTime _healthCheckLastCall = DateTime.MinValue;
     private bool _defaultHealthy = true;
     private bool _fallbackHealthy = true;
     
@@ -32,35 +31,51 @@ public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext c
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var paymentJson = await _queue.ListLeftPopAsync("payments", 100);
+            var paymentJson = await _queue.ListLeftPopAsync("payments");
                 
-            if (paymentJson is null || paymentJson.Length <= 0)
+            if (paymentJson.HasValue)
             {
-                await Task.Delay(1000, stoppingToken);
+                await Task.Delay(5, stoppingToken);
                 continue;
             }
-
-            List<Payment> payments = paymentJson.Select(p => JsonSerializer.Deserialize<Payment>(p)).ToList();
             
+            if (paymentJson.IsNullOrEmpty) continue;
+                
+            var payment = JsonSerializer.Deserialize<Payment>(paymentJson, RinhaSerializerContext.Default.Payment);
+
             try
             {
-                _defaultHealthy = await IsProcessorHealthy(true);
+                await IsProcessorHealthy().ConfigureAwait(false);
+                
+                var processedPayments = new List<Payment>();
 
                 if (_defaultHealthy)
                 {
-                    await ProcessByDefault(payments, stoppingToken);
-                    continue;
+                    var processed = await ProcessByDefault(payment, stoppingToken).ConfigureAwait(false);
+                    if (processed != null)
+                    {
+                        processedPayments.Add(processed);
+                    }
                 }
-
-                _fallbackHealthy = await IsProcessorHealthy(false);
-
-                if (_fallbackHealthy)
+                else if (_fallbackHealthy)
                 {
-                    await ProcessByFallback(payments, stoppingToken);
-                    continue;
+                    var processed = await ProcessByFallback(payment, stoppingToken).ConfigureAwait(false);
+                    if (processed != null)
+                    {
+                        processedPayments.Add(processed);
+                    }
                 }
-
-                await _queue.ListRightPushAsync("payments", paymentJson, flags: CommandFlags.FireAndForget);
+                else
+                {
+                    await _queue.ListRightPushAsync("payments", 
+                        JsonSerializer.Serialize(payment, RinhaSerializerContext.Default.Payment), 
+                        flags: CommandFlags.FireAndForget).ConfigureAwait(false);
+                }
+                
+                if (processedPayments.Count > 5)
+                {
+                    await paymentRepository.InsertPaymentBatchAsync(processedPayments, stoppingToken).ConfigureAwait(false);
+                }
             }
             catch (Exception e)
             {
@@ -69,73 +84,79 @@ public class ProcessPaymentService(IConnectionMultiplexer redis, IRinhaContext c
         }
     }
 
-    private async Task ProcessByDefault(List<Payment> payments, CancellationToken stoppingToken)
+    private async Task<Payment?> ProcessByDefault(Payment payment, CancellationToken stoppingToken)
     {
-        foreach (var payment in payments)
+        var response = await _httpClientDefault
+                                .PostAsJsonAsync("payments", payment, stoppingToken)
+                                .ConfigureAwait(false);
+            
+        if (!response.IsSuccessStatusCode)
         {
-            var response = await _httpClientDefault.PostAsJsonAsync("payments", payment, stoppingToken);
-            
-            if (!response.IsSuccessStatusCode)
-            {
-                await _queue.ListRightPushAsync("payments", JsonSerializer.Serialize(payment), flags: CommandFlags.FireAndForget);
-                continue;
-            }
-            
-            payment.ProcessorName = "default";
-            context.Payment.Add(payment);
+            await _queue.ListRightPushAsync("payments", 
+                                            JsonSerializer.Serialize(payment, RinhaSerializerContext.Default.Payment), 
+                                            flags: CommandFlags.FireAndForget).ConfigureAwait(false);
+            return null;
         }
-  
-        await context.SaveChangesAsync(stoppingToken);
+            
+        payment.ProcessorName = "default";
+        return payment;
     }
     
-    private async Task ProcessByFallback(List<Payment> payments, CancellationToken stoppingToken)
+    private async Task<Payment?> ProcessByFallback(Payment payment, CancellationToken stoppingToken)
     {
-        foreach (var payment in payments)
+        var response = await _httpClientFallback
+                                .PostAsJsonAsync("payments", payment, stoppingToken)
+                                .ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
         {
-            var response = await _httpClientFallback.PostAsJsonAsync("payments", payment, stoppingToken);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                await _queue.ListRightPushAsync("payments", JsonSerializer.Serialize(payment), flags: CommandFlags.FireAndForget);
-                continue;
-            }
-
-            payment.ProcessorName = "fallback";
-            context.Payment.Add(payment);
+            await _queue.ListRightPushAsync("payments", 
+                                            JsonSerializer.Serialize(payment, RinhaSerializerContext.Default.Payment), 
+                                            flags: CommandFlags.FireAndForget).ConfigureAwait(false);
+            return null;
         }
-  
-        await context.SaveChangesAsync(stoppingToken);
+            
+        payment.ProcessorName = "fallback";
+        return payment;
     }
     
-    private async Task<bool> IsProcessorHealthy(bool isDefault)
+    private async Task IsProcessorHealthy()
     {
-        if (isDefault && (DateTime.UtcNow - _defaultHealthCheckLastCall).TotalSeconds < 5)
-        {
-            return _defaultHealthy;
-        }
-        
-        if (!isDefault && (DateTime.UtcNow - _fallbackHealthCheckLastCall).TotalSeconds < 5)
-        {
-            return _fallbackHealthy;
-        }
-        
-        var healthcheck = isDefault ? await _httpClientDefault.GetAsync("payments/service-health") 
-                                                        : await _httpClientFallback.GetAsync("payments/service-health");
-        
-        if (!healthcheck.IsSuccessStatusCode)
-            return false;
-        
-        if (isDefault)
-        {
-            _defaultHealthCheckLastCall = DateTime.UtcNow;
-        }
-        else
-        {
-            _fallbackHealthCheckLastCall = DateTime.UtcNow;
-        }
-        
-        var response = JsonSerializer.Deserialize<HealthcheckDTO>(await healthcheck.Content.ReadAsStringAsync());
+        if (DateTime.UtcNow.Subtract(_healthCheckLastCall).TotalSeconds <= 5)
+            return;
 
-        return response is not null && !response.Failing && response.MinResponseTime <= 100;
+        try
+        {
+            var taskDefault = _httpClientDefault.GetAsync("payments/service-health");
+            var taskFallback = _httpClientFallback.GetAsync("payments/service-health");
+
+            await Task.WhenAll(taskDefault, taskFallback).ConfigureAwait(false);
+            
+            _healthCheckLastCall = DateTime.UtcNow;
+
+            if (!taskDefault.Result.IsSuccessStatusCode ||
+                !taskFallback.Result.IsSuccessStatusCode)
+            {
+                return;
+            }
+            
+            var healthcheckDefault = await taskDefault.Result.Content.ReadFromJsonAsync<HealthcheckDTO>
+                                                    (RinhaSerializerContext.Default.HealthcheckDTO).ConfigureAwait(false);
+            
+            var healthcheckFallback = await taskFallback.Result.Content.ReadFromJsonAsync<HealthcheckDTO>
+                                                    (RinhaSerializerContext.Default.HealthcheckDTO).ConfigureAwait(false);
+
+            if (healthcheckDefault is null || healthcheckFallback is null)
+            {
+                return;
+            }
+            
+            _defaultHealthy = healthcheckDefault is { Failing: false, MinResponseTime: < 100 };
+            _fallbackHealthy = healthcheckFallback is { Failing: false, MinResponseTime: < 100 };
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"[-] Health check failed: {e}");
+        }
     }
 }
