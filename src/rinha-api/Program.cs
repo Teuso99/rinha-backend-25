@@ -33,21 +33,20 @@ app.UseRouting();
 
 app.MapGet("/payments-summary", async (DateTime? from, DateTime? to, [FromServices] IPaymentRepository paymentRepository) =>
 {
-    var paymentsByDefault = await paymentRepository.GetPaymentsByProcessorAsync("default", from, to);
-    var paymentsByFallback = await paymentRepository.GetPaymentsByProcessorAsync("fallback", from, to);
+    var result = await paymentRepository.GetPaymentsSummaryAsync(from, to);
     
-    return Results.Ok(new PaymentsDTO(paymentsByDefault, paymentsByFallback));
+    return Results.Ok(result);
 });
 
 app.MapPost("/payments", async (PaymentRequestDTO request, [FromServices] IConnectionMultiplexer redis) =>
 {
     var queue = redis.GetDatabase();
     
-    var payment = new Payment(request.CorrelationId, request.Amount, string.Empty);
+    var payment = new PaymentProcessorRequestDTO(request.CorrelationId, request.Amount);
     
     var result = await queue.ListRightPushAsync("payments", 
-                                                    JsonSerializer.Serialize(payment, 
-                                                                                RinhaSerializerContext.Default.Payment));
+        JsonSerializer.Serialize(payment, 
+            RinhaSerializerContext.Default.PaymentProcessorRequestDTO));
 
     return result > 0 ? Results.Created() : Results.BadRequest();
 });
@@ -58,6 +57,8 @@ record PaymentRequestDTO(Guid CorrelationId, decimal Amount);
 
 [JsonSerializable(typeof(HealthcheckDTO))]
 [JsonSerializable(typeof(PaymentRequestDTO))]
-[JsonSerializable(typeof(PaymentsDTO))]
+[JsonSerializable(typeof(PaymentsSummaryDTO))]
+[JsonSerializable(typeof(PaymentsByProcessorDTO))]
+[JsonSerializable(typeof(PaymentProcessorRequestDTO))]
 [JsonSerializable(typeof(Payment))]
 internal partial class RinhaSerializerContext : JsonSerializerContext { }

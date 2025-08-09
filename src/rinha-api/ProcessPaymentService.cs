@@ -33,48 +33,41 @@ public class ProcessPaymentService(IConnectionMultiplexer redis, IPaymentReposit
         {
             var paymentJson = await _queue.ListLeftPopAsync("payments");
                 
-            if (paymentJson.HasValue)
+            if (paymentJson.IsNullOrEmpty)
             {
                 await Task.Delay(5, stoppingToken);
                 continue;
             }
             
-            if (paymentJson.IsNullOrEmpty) continue;
-                
-            var payment = JsonSerializer.Deserialize<Payment>(paymentJson, RinhaSerializerContext.Default.Payment);
+            var payment = JsonSerializer.Deserialize<PaymentProcessorRequestDTO>(paymentJson, RinhaSerializerContext.Default.PaymentProcessorRequestDTO);
 
             try
             {
                 await IsProcessorHealthy().ConfigureAwait(false);
                 
-                var processedPayments = new List<Payment>();
-
                 if (_defaultHealthy)
                 {
                     var processed = await ProcessByDefault(payment, stoppingToken).ConfigureAwait(false);
+                    
                     if (processed != null)
                     {
-                        processedPayments.Add(processed);
+                        await paymentRepository.InsertPaymentAsync(processed, stoppingToken).ConfigureAwait(false);
                     }
                 }
                 else if (_fallbackHealthy)
                 {
                     var processed = await ProcessByFallback(payment, stoppingToken).ConfigureAwait(false);
+                    
                     if (processed != null)
                     {
-                        processedPayments.Add(processed);
+                        await paymentRepository.InsertPaymentAsync(processed, stoppingToken).ConfigureAwait(false);
                     }
                 }
                 else
                 {
                     await _queue.ListRightPushAsync("payments", 
-                        JsonSerializer.Serialize(payment, RinhaSerializerContext.Default.Payment), 
+                        JsonSerializer.Serialize(payment, RinhaSerializerContext.Default.PaymentProcessorRequestDTO), 
                         flags: CommandFlags.FireAndForget).ConfigureAwait(false);
-                }
-                
-                if (processedPayments.Count > 5)
-                {
-                    await paymentRepository.InsertPaymentBatchAsync(processedPayments, stoppingToken).ConfigureAwait(false);
                 }
             }
             catch (Exception e)
@@ -84,40 +77,60 @@ public class ProcessPaymentService(IConnectionMultiplexer redis, IPaymentReposit
         }
     }
 
-    private async Task<Payment?> ProcessByDefault(Payment payment, CancellationToken stoppingToken)
+    private async Task<Payment?> ProcessByDefault(PaymentProcessorRequestDTO payment, CancellationToken stoppingToken)
     {
-        var response = await _httpClientDefault
-                                .PostAsJsonAsync("payments", payment, stoppingToken)
-                                .ConfigureAwait(false);
-            
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            await _queue.ListRightPushAsync("payments", 
-                                            JsonSerializer.Serialize(payment, RinhaSerializerContext.Default.Payment), 
-                                            flags: CommandFlags.FireAndForget).ConfigureAwait(false);
-            return null;
-        }
+            var response = await _httpClientDefault
+                .PostAsJsonAsync("payments", 
+                    payment, 
+                    RinhaSerializerContext.Default.PaymentProcessorRequestDTO,
+                    stoppingToken)
+                .ConfigureAwait(false);
             
-        payment.ProcessorName = "default";
-        return payment;
+            if (!response.IsSuccessStatusCode)
+            {
+                await _queue.ListRightPushAsync("payments", 
+                    JsonSerializer.Serialize(payment, RinhaSerializerContext.Default.PaymentProcessorRequestDTO), 
+                    flags: CommandFlags.FireAndForget).ConfigureAwait(false);
+                return null;
+            }
+            
+            return new Payment(payment.CorrelationId, payment.Amount, "default");
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(e);
+            throw;
+        }
     }
     
-    private async Task<Payment?> ProcessByFallback(Payment payment, CancellationToken stoppingToken)
+    private async Task<Payment?> ProcessByFallback(PaymentProcessorRequestDTO payment, CancellationToken stoppingToken)
     {
-        var response = await _httpClientFallback
-                                .PostAsJsonAsync("payments", payment, stoppingToken)
-                                .ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            await _queue.ListRightPushAsync("payments", 
-                                            JsonSerializer.Serialize(payment, RinhaSerializerContext.Default.Payment), 
-                                            flags: CommandFlags.FireAndForget).ConfigureAwait(false);
-            return null;
+            var response = await _httpClientFallback
+                .PostAsJsonAsync("payments", 
+                    payment, 
+                    RinhaSerializerContext.Default.PaymentProcessorRequestDTO,
+                    stoppingToken)
+                .ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                await _queue.ListRightPushAsync("payments", 
+                    JsonSerializer.Serialize(payment, RinhaSerializerContext.Default.PaymentProcessorRequestDTO), 
+                    flags: CommandFlags.FireAndForget).ConfigureAwait(false);
+                return null;
+            }
+
+            return new Payment(payment.CorrelationId, payment.Amount, "fallback");
         }
-            
-        payment.ProcessorName = "fallback";
-        return payment;
+        catch (Exception e)
+        {
+            Console.WriteLine(e);
+            throw;
+        }
     }
     
     private async Task IsProcessorHealthy()

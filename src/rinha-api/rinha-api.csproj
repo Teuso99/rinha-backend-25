@@ -6,6 +6,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <RootNamespace>rinha_api</RootNamespace>
         <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+        <PublishAot>true</PublishAot>
     </PropertyGroup>
 
     <ItemGroup>
