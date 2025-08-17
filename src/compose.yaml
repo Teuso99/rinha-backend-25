@@ -1,9 +1,6 @@
 ﻿x-service-templates:
   api: &api
-    image: rinha-api
-    build:
-      context: .
-      dockerfile: rinha-api/Dockerfile
+    image: teuso99/teuso-rinha-2025:1.0
     networks:
       - rinha
       - payment-processor
